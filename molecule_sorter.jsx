@@ -1,0 +1,353 @@
+import React, { useState, useEffect } from 'react';
+import { Upload, Filter, X, ChevronUp, ChevronDown } from 'lucide-react';
+
+const MoleculeSorter = () => {
+  const [data, setData] = useState([]);
+  const [headers, setHeaders] = useState([]);
+  const [filteredData, setFilteredData] = useState([]);
+  const [filters, setFilters] = useState([]);
+  const [sortConfig, setSortConfig] = useState({ key: 'complexity', direction: 'desc' });
+  const [error, setError] = useState('');
+  const [copiedCell, setCopiedCell] = useState(null);
+
+  const handleCellClick = (value, rowId, header) => {
+    navigator.clipboard.writeText(value);
+    setCopiedCell(`${rowId}-${header}`);
+    setTimeout(() => setCopiedCell(null), 1000);
+  };
+
+  // Calculate synthetic complexity score
+  const calculateComplexity = (smiles) => {
+    if (!smiles) return 0;
+    
+    // Complexity factors
+    let score = 0;
+    
+    // Length contributes to complexity
+    score += smiles.length * 0.5;
+    
+    // Count rings (indicated by numbers in SMILES)
+    const rings = (smiles.match(/\d/g) || []).length;
+    score += rings * 5;
+    
+    // Count branches (parentheses)
+    const branches = (smiles.match(/\(/g) || []).length;
+    score += branches * 3;
+    
+    // Count stereocenters (@ symbols)
+    const stereo = (smiles.match(/@/g) || []).length;
+    score += stereo * 4;
+    
+    // Count aromatic atoms (lowercase letters)
+    const aromatic = (smiles.match(/[a-z]/g) || []).length;
+    score += aromatic * 2;
+    
+    // Count heteroatoms (N, O, S, P, etc.)
+    const hetero = (smiles.match(/[NOPS]/g) || []).length;
+    score += hetero * 1.5;
+    
+    // Count multiple bonds
+    const doubleBonds = (smiles.match(/=/g) || []).length;
+    const tripleBonds = (smiles.match(/#/g) || []).length;
+    score += doubleBonds * 1.5 + tripleBonds * 2;
+    
+    return Math.round(score * 10) / 10;
+  };
+
+  const handleFileUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target.result;
+        const lines = text.split('\n').filter(line => line.trim());
+        
+        if (lines.length < 2) {
+          setError('CSV must have at least a header row and one data row');
+          return;
+        }
+
+        // Parse headers
+        const headerRow = lines[0].split(',').map(h => h.trim());
+        setHeaders(headerRow);
+
+        // Parse data rows
+        const rows = lines.slice(1).map((line, idx) => {
+          const values = line.split(',').map(v => v.trim());
+          const row = { id: idx };
+          
+          headerRow.forEach((header, i) => {
+            row[header] = values[i] || '';
+          });
+
+          // Calculate complexity for SMILES in column index 1
+          if (values[1]) {
+            row.complexity = calculateComplexity(values[1]);
+          } else {
+            row.complexity = 0;
+          }
+
+          return row;
+        });
+
+        setData(rows);
+        setFilteredData(rows);
+        setError('');
+      } catch (err) {
+        setError('Error parsing CSV file: ' + err.message);
+      }
+    };
+
+    reader.readAsText(file);
+  };
+
+  const addFilter = () => {
+    setFilters([...filters, { column: '', operator: '>', value: '' }]);
+  };
+
+  const updateFilter = (index, field, value) => {
+    const newFilters = [...filters];
+    newFilters[index][field] = value;
+    setFilters(newFilters);
+  };
+
+  const removeFilter = (index) => {
+    setFilters(filters.filter((_, i) => i !== index));
+  };
+
+  const applyFilters = () => {
+    let result = [...data];
+    const activeFilters = filters.filter(f => f.column && f.value !== '');
+
+    activeFilters.forEach(filter => {
+      result = result.filter(row => {
+        const cellValue = row[filter.column];
+        const filterValue = filter.value;
+
+        // Try to convert to numbers if possible
+        const numCell = parseFloat(cellValue);
+        const numFilter = parseFloat(filterValue);
+        const isNumeric = !isNaN(numCell) && !isNaN(numFilter);
+
+        switch (filter.operator) {
+          case '>':
+            return isNumeric ? numCell > numFilter : false;
+          case '<':
+            return isNumeric ? numCell < numFilter : false;
+          case '=':
+            return isNumeric ? numCell === numFilter : cellValue === filterValue;
+          case '!=':
+            return isNumeric ? numCell !== numFilter : cellValue !== filterValue;
+          default:
+            return true;
+        }
+      });
+    });
+
+    setFilteredData(result);
+  };
+
+  const handleSort = (key) => {
+    let direction = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
+
+  useEffect(() => {
+    applyFilters();
+  }, [filters, data]);
+
+  useEffect(() => {
+    const sorted = [...filteredData].sort((a, b) => {
+      const aVal = a[sortConfig.key];
+      const bVal = b[sortConfig.key];
+
+      const aNum = parseFloat(aVal);
+      const bNum = parseFloat(bVal);
+      const isNumeric = !isNaN(aNum) && !isNaN(bNum);
+
+      if (isNumeric) {
+        return sortConfig.direction === 'asc' ? aNum - bNum : bNum - aNum;
+      } else {
+        const aStr = String(aVal || '');
+        const bStr = String(bVal || '');
+        return sortConfig.direction === 'asc' 
+          ? aStr.localeCompare(bStr)
+          : bStr.localeCompare(aStr);
+      }
+    });
+    
+    setFilteredData(sorted);
+  }, [sortConfig]);
+
+  return (
+    <div className="h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex flex-col">
+      <div className="flex-1 overflow-hidden flex flex-col p-4">
+        <div className="bg-white rounded-lg shadow-xl p-4 mb-4">
+          <h1 className="text-2xl font-bold text-gray-800 mb-3">
+            Molecule Complexity Sorter
+          </h1>
+          
+          <div className="mb-3">
+            <label className="flex items-center justify-center w-full px-4 py-4 bg-indigo-50 border-2 border-dashed border-indigo-300 rounded-lg cursor-pointer hover:bg-indigo-100 transition">
+              <Upload className="w-5 h-5 mr-2 text-indigo-600" />
+              <span className="text-indigo-600 font-medium">Upload CSV File</span>
+              <input
+                type="file"
+                accept=".csv"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+            </label>
+          </div>
+
+          {error && (
+            <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+              {error}
+            </div>
+          )}
+
+          {data.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-lg font-semibold text-gray-700 flex items-center">
+                  <Filter className="w-4 h-4 mr-2" />
+                  Filters
+                </h2>
+                <button
+                  onClick={addFilter}
+                  className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 transition"
+                >
+                  Add Filter
+                </button>
+              </div>
+
+              {filters.filter(f => f.column && f.value !== '').length > 0 && (
+                <div className="mb-3 p-2 bg-blue-50 border border-blue-200 rounded-lg">
+                  <div className="text-xs font-medium text-blue-800 mb-1">Active Filters:</div>
+                  <div className="flex flex-wrap gap-1">
+                    {filters.filter(f => f.column && f.value !== '').map((filter, idx) => (
+                      <div key={idx} className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded text-xs">
+                        {filter.column} {filter.operator} {filter.value}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="max-h-32 overflow-y-auto space-y-2">
+                {filters.map((filter, idx) => (
+                  <div key={idx} className="flex items-center gap-2 bg-gray-50 p-2 rounded-lg">
+                    <input
+                      type="text"
+                      placeholder="Column name"
+                      value={filter.column}
+                      onChange={(e) => updateFilter(idx, 'column', e.target.value)}
+                      className="flex-1 px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                      list={`columns-${idx}`}
+                    />
+                    <datalist id={`columns-${idx}`}>
+                      {headers.map(h => <option key={h} value={h} />)}
+                      <option value="complexity" />
+                    </datalist>
+
+                    <select
+                      value={filter.operator}
+                      onChange={(e) => updateFilter(idx, 'operator', e.target.value)}
+                      className="px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value=">">{'>'}</option>
+                      <option value="<">{'<'}</option>
+                      <option value="=">=</option>
+                      <option value="!=">!=</option>
+                    </select>
+
+                    <input
+                      type="text"
+                      placeholder="Value"
+                      value={filter.value}
+                      onChange={(e) => updateFilter(idx, 'value', e.target.value)}
+                      className="flex-1 px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                    />
+
+                    <button
+                      onClick={() => removeFilter(idx)}
+                      className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {filteredData.length > 0 && (
+          <div className="bg-white rounded-lg shadow-xl overflow-hidden flex-1 flex flex-col">
+            <div className="flex-1 overflow-auto">
+              <table className="w-full">
+                <thead className="bg-indigo-600 text-white sticky top-0">
+                  <tr>
+                    {[...headers, 'Complexity'].map(header => (
+                      <th
+                        key={header}
+                        onClick={() => handleSort(header === 'Complexity' ? 'complexity' : header)}
+                        className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer hover:bg-indigo-700 transition whitespace-nowrap"
+                      >
+                        <div className="flex items-center justify-between">
+                          {header}
+                          {sortConfig.key === (header === 'Complexity' ? 'complexity' : header) && (
+                            sortConfig.direction === 'asc' ? 
+                              <ChevronUp className="w-3 h-3" /> : 
+                              <ChevronDown className="w-3 h-3" />
+                          )}
+                        </div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {filteredData.map((row, idx) => (
+                    <tr key={row.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                      {headers.map(header => (
+                        <td
+                          key={header}
+                          onClick={() => handleCellClick(row[header], row.id, header)}
+                          className={`px-4 py-2 text-sm text-gray-700 cursor-pointer hover:bg-indigo-50 transition whitespace-nowrap ${
+                            copiedCell === `${row.id}-${header}` ? 'bg-green-100' : ''
+                          }`}
+                          title="Click to copy"
+                        >
+                          {row[header]}
+                        </td>
+                      ))}
+                      <td
+                        onClick={() => handleCellClick(row.complexity.toString(), row.id, 'complexity')}
+                        className={`px-4 py-2 text-sm font-semibold text-indigo-600 cursor-pointer hover:bg-indigo-50 transition whitespace-nowrap ${
+                          copiedCell === `${row.id}-complexity` ? 'bg-green-100' : ''
+                        }`}
+                        title="Click to copy"
+                      >
+                        {row.complexity}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="bg-gray-50 px-4 py-2 text-xs text-gray-600 border-t">
+              Showing {filteredData.length} of {data.length} molecules
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default MoleculeSorter;
